@@ -127,9 +127,22 @@ fi
 
 success "PR Fairy CLI installed!"
 
-# Launch the wizard
-echo
-echo -e "${BOLD}${MAGENTA}Starting the interactive setup wizard...${RESET}"
-echo
-
-exec fairy install "$@"
+# Launch the wizard only if we're in an interactive terminal.
+# When the script is piped (curl | bash), we must not try to run interactive prompts.
+if [ -t 0 ]; then
+    echo
+    echo -e "${BOLD}${MAGENTA}Starting the interactive setup wizard...${RESET}"
+    echo
+    exec fairy install "$@"
+else
+    echo
+    echo -e "${BOLD}${GREEN}Installation complete!${RESET}"
+    echo
+    echo "To finish setting up PR Fairy (choose language, model, etc.), run:"
+    echo
+    echo "    ${BOLD}fairy install${RESET}"
+    echo
+    echo "You can also start using it right away with:"
+    echo "    fairy watch --help"
+    echo
+fi
