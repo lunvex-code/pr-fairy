@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pr-fairy"
+version = "0.1.0"
+dependencies = [
+    "typer>=0.12",
+    "rich",
+    "questionary",
+    "httpx",
+    "pydantic>=2.7",
+    "pyyaml",
+    "gitpython",
+    "pathspec",
+]
+
+[project.scripts]
+fairy = "pr_fairy.cli:app"
