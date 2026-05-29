@@ -3,6 +3,7 @@ import subprocess
 from typing import Any
 
 import httpx
+import questionary
 from rich.console import Console
 from rich.prompt import Confirm
 
@@ -114,9 +115,44 @@ def ensure_suitable_llm_model(preferred_tag: str | None = None, *, interactive: 
         console.print(f"\n[cyan]По умолчанию будет использована:[/cyan] [bold]{best.tag}[/bold]")
         return best.tag
 
-    console.print(f"\n[bold]Рекомендую установить:[/bold] [green]{best.tag}[/green] — {best.why_good}")
+    # === Interactive selection (what the user asked for) ===
+    good_models = get_llm_model_recommendations()
+    installed = get_installed_ollama_models()
 
-    if Confirm.ask(f"\nСкачать модель {best.tag} сейчас? (~{best.size_gb:.1f} ГБ)", default=True):
+    choices = []
+    model_map = {}  # label -> recommendation
+
+    for rec in good_models:
+        already_installed = any(
+            rec.tag in m or m.startswith(rec.tag.split(":")[0]) for m in installed
+        )
+        status = " ✓ уже установлена" if already_installed else ""
+
+        label = f"{rec.tag}  (~{rec.size_gb:.1f} ГБ) — {rec.why_good[:55]}...{status}"
+        choices.append(label)
+        model_map[label] = rec
+
+    choices.append("Пропустить (выбрать модель позже)")
+
+    selected = questionary.select(
+        "Выбери модель (стрелки ↑↓, Enter):",
+        choices=choices,
+        default=choices[0],  # top recommendation
+    ).ask()
+
+    if not selected or "Пропустить" in selected:
+        console.print("\n[dim]Хорошо, модель можно скачать позже командой: [bold]fairy models[/bold] или при следующем `fairy watch --llm`[/dim]")
+        return best.tag
+
+    chosen_rec = model_map[selected]
+
+    # If already installed, just return it
+    if any(chosen_rec.tag in m or m.startswith(chosen_rec.tag.split(":")[0]) for m in installed):
+        console.print(f"\n[green]✓ Модель {chosen_rec.tag} уже установлена[/green]")
+        return chosen_rec.tag
+
+    # Ask to download the chosen one
+    if Confirm.ask(f"\nСкачать модель {chosen_rec.tag} сейчас? (~{chosen_rec.size_gb:.1f} ГБ)", default=True):
         if not is_ollama_installed():
             console.print("\n[yellow]Ollama не установлен.[/yellow]")
             if Confirm.ask("Установить Ollama автоматически сейчас?", default=True):
@@ -124,28 +160,28 @@ def ensure_suitable_llm_model(preferred_tag: str | None = None, *, interactive: 
                 if not success:
                     console.print("[red]Не удалось установить Ollama автоматически.[/red]")
                     console.print("Установи вручную: https://ollama.com")
-                    return best.tag
+                    return chosen_rec.tag
 
         if not start_ollama_if_needed():
             console.print("\n[red]Не удалось запустить Ollama сервер.[/red]")
             console.print("Попробуй:")
             console.print("  • Открой приложение Ollama (macOS)")
             console.print("  • Выполни в терминале: [bold]ollama serve[/bold]")
-            return best.tag
+            return chosen_rec.tag
 
-        success = _pull_model_with_progress(best.tag)
+        success = _pull_model_with_progress(chosen_rec.tag)
         if success:
-            console.print(f"\n[bold green]✓ Модель {best.tag} успешно скачана![/bold green]")
+            console.print(f"\n[bold green]✓ Модель {chosen_rec.tag} успешно скачана![/bold green]")
             console.print("Теперь `fairy watch --llm` будет работать на хорошем уровне.\n")
-            return best.tag
+            return chosen_rec.tag
         else:
             console.print("[yellow]Не удалось скачать. Можно попробовать позже командой:[/yellow]")
-            console.print(f"  ollama pull {best.tag}")
-            return best.tag
+            console.print(f"  ollama pull {chosen_rec.tag}")
+            return chosen_rec.tag
 
-    # User refused — let them pick manually or fall back
-    console.print("\n[dim]Ты можешь выбрать модель вручную позже через `fairy models` или `--model`.[/dim]")
-    return best.tag
+    # User refused the chosen one
+    console.print("\n[dim]Хорошо, модель можно скачать позже.[/dim]")
+    return chosen_rec.tag
 
 
 def _pull_model_with_progress(tag: str) -> bool:
