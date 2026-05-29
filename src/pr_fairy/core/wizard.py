@@ -13,6 +13,7 @@ New flow (as requested):
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import questionary
@@ -135,6 +136,14 @@ def show_welcome() -> bool:
     title = t("welcome_title")
     console.print(Panel(title, style="bold magenta", border_style="bright_magenta"))
     console.print(f"\n[bold]{t('welcome_question')}[/bold]")
+
+    # If stdin is not a TTY (e.g. running in a script or piped install),
+    # we cannot do interactive prompts. Exit gracefully instead of ugly "Aborted."
+    if not sys.stdin.isatty():
+        console.print("\n[yellow]Non-interactive environment detected.[/yellow]")
+        console.print("Please run [bold]fairy install[/bold] manually in your terminal to complete setup.")
+        return False
+
     return Confirm.ask(t("welcome_confirm"), default=True)
 
 
