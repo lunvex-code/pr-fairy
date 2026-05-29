@@ -169,6 +169,32 @@ def watch(
 
     console.print(f"\n[bold]Всего предложено правок:[/bold] [green]{total_fixes}[/green]\n")
 
+    # Offer to download LLM model if user got 0 results and is not using LLM mode
+    if total_fixes == 0 and not use_llm:
+        try:
+            from pr_fairy.core.ollama import get_installed_ollama_models, ensure_suitable_llm_model
+            from pr_fairy.core.model_recommender import get_llm_model_recommendations
+            from rich.prompt import Confirm
+
+            installed = get_installed_ollama_models()
+            recommended = get_llm_model_recommendations()
+
+            has_good_model = False
+            for rec in recommended:
+                if any(rec.tag in m or m.startswith(rec.tag.split(":")[0]) for m in installed):
+                    has_good_model = True
+                    break
+
+            if not has_good_model:
+                console.print("\n[dim]Фея нашла мало правок, потому что сейчас работает только в базовом режиме.[/dim]")
+                if Confirm.ask(
+                    "Хочешь скачать умную модель, чтобы находить опечатки в комментариях и улучшения в документации?",
+                    default=False
+                ):
+                    ensure_suitable_llm_model(interactive=True)
+        except Exception:
+            pass  # Don't break the command if something goes wrong with the suggestion
+
 
 @app.command()
 def fix(path: str = ".", apply: bool = False):
