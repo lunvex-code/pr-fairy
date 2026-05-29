@@ -21,21 +21,46 @@ def is_ollama_installed() -> bool:
 
 
 def start_ollama_if_needed() -> bool:
+    """Try to ensure Ollama server is running. More robust version."""
+    # First quick check
     try:
-        r = httpx.get("http://localhost:11434/api/tags", timeout=1.5)
-        return r.status_code == 200
+        r = httpx.get("http://localhost:11434/api/tags", timeout=1.2)
+        if r.status_code == 200:
+            return True
     except Exception:
         pass
 
-    if is_ollama_installed():
-        try:
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            import time
-            time.sleep(2.5)
-            return True
-        except Exception:
-            return False
-    return False
+    if not is_ollama_installed():
+        return False
+
+    # Try to start it
+    try:
+        # On macOS, Ollama is often started via the app. 
+        # We still try `ollama serve` as fallback.
+        proc = subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+
+        # Give it time to boot
+        import time
+        for _ in range(6):  # up to ~6 seconds
+            time.sleep(1.0)
+            try:
+                r = httpx.get("http://localhost:11434/api/tags", timeout=1.0)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                continue
+
+        # Final check
+        r = httpx.get("http://localhost:11434/api/tags", timeout=1.5)
+        return r.status_code == 200
+
+    except Exception:
+        return False
 
 
 def get_installed_ollama_models() -> list[str]:
@@ -92,8 +117,20 @@ def ensure_suitable_llm_model(preferred_tag: str | None = None, *, interactive: 
     console.print(f"\n[bold]Рекомендую установить:[/bold] [green]{best.tag}[/green] — {best.why_good}")
 
     if Confirm.ask(f"\nСкачать модель {best.tag} сейчас? (~{best.size_gb:.1f} ГБ)", default=True):
+        if not is_ollama_installed():
+            console.print("\n[yellow]Ollama не установлен.[/yellow]")
+            if Confirm.ask("Установить Ollama автоматически сейчас?", default=True):
+                success = _install_ollama()
+                if not success:
+                    console.print("[red]Не удалось установить Ollama автоматически.[/red]")
+                    console.print("Установи вручную: https://ollama.com")
+                    return best.tag
+
         if not start_ollama_if_needed():
-            console.print("[red]Не удалось запустить Ollama. Установи его и попробуй снова.[/red]")
+            console.print("\n[red]Не удалось запустить Ollama сервер.[/red]")
+            console.print("Попробуй:")
+            console.print("  • Открой приложение Ollama (macOS)")
+            console.print("  • Выполни в терминале: [bold]ollama serve[/bold]")
             return best.tag
 
         success = _pull_model_with_progress(best.tag)
@@ -138,4 +175,31 @@ def _pull_model_with_progress(tag: str) -> bool:
 
     except Exception as e:
         console.print(f"[red]Ошибка при скачивании: {e}[/red]")
+        return False
+
+
+def _install_ollama() -> bool:
+    """Attempt to install Ollama using the official one-liner."""
+    import platform
+    import subprocess
+
+    system = platform.system().lower()
+    console.print("[cyan]Устанавливаю Ollama...[/cyan]")
+
+    try:
+        if system == "darwin" or system == "linux":
+            cmd = "curl -fsSL https://ollama.com/install.sh | sh"
+            result = subprocess.run(cmd, shell=True, check=False, capture_output=True, text=True)
+            if result.returncode == 0:
+                console.print("[green]✓ Ollama установлен![/green]")
+                return True
+            else:
+                console.print(f"[red]Установка завершилась с ошибкой:[/red]\n{result.stderr}")
+                return False
+        else:
+            console.print("Автоустановка на Windows не поддерживается этим скриптом.")
+            console.print("Пожалуйста, скачай с https://ollama.com")
+            return False
+    except Exception as e:
+        console.print(f"[red]Ошибка при установке Ollama: {e}[/red]")
         return False

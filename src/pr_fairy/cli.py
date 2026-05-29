@@ -44,11 +44,18 @@ def install():
 def watch(
     auto: Annotated[bool, typer.Option("--auto", help="Автоматически создавать PR")] = False,
     max_repos: Annotated[int, typer.Option("--max-repos")] = 12,
-    use_llm: Annotated[bool, typer.Option("--llm", help="Включить мощный LLM-режим поиска правок")] = False,
-    path: Annotated[str | None, typer.Option("--path")] = None,
+    use_llm: Annotated[bool, typer.Option("--llm", help="Включить LLM-режим (требует --path)")] = False,
+    path: Annotated[str | None, typer.Option(
+        "--path", 
+        help="Сканировать только указанный репозиторий (рекомендуется). Можно указать несколько через запятую."
+    )] = None,
     force: Annotated[bool, typer.Option("--force", hidden=True)] = False,
 ) -> None:
-    """Ищет мелкий техдолг. С --llm использует локальную модель для умных правок."""
+    """Ищет мелкий техдолг. С --llm использует локальную модель для умных правок.
+
+    По умолчанию сканирует все папки из конфига (может быть много репозиториев).
+    Используй --path, чтобы ограничить сканирование конкретными репозиториями.
+    """
     from pr_fairy.core.llm import get_llm
 
     cfg = load_config()
@@ -61,26 +68,53 @@ def watch(
         border_style="magenta",
     ))
 
-    # === Single repo mode ===
-    if path:
-        target = Path(path).resolve()
-        if not (target / ".git").exists():
-            console.print("[red]Не git-репозиторий[/red]")
+    if use_llm:
+        # Strict requirement: --path is mandatory when using --llm
+        if not path:
+            console.print("\n[red]✗ Ошибка: при использовании --llm обязательно указывать --path[/red]\n")
+            console.print("PR Fairy в LLM-режиме не будет автоматически сканировать все твои репозитории.\n")
+            console.print("Примеры использования:\n")
+            console.print("  [cyan]fairy watch --llm --path ~/projects/my-repo[/cyan]")
+            console.print("  [cyan]fairy watch --llm --path ~/projects/kingdom,~/projects/salesforge-api[/cyan]")
+            console.print("  [cyan]fairy watch --llm --auto --path ~/projects/kingdom[/cyan]\n")
+            console.print("Если хочешь сканировать много репозиториев — используй флаг [bold]--all[/bold] (пока не реализован).")
             raise typer.Exit(1)
 
-        g = GitRepo(target)
-        is_clean = not g.is_dirty(untracked_files=False) if not force else True
+        from pr_fairy.core.ollama import get_installed_ollama_models
+        installed = get_installed_ollama_models()
+        if not installed:
+            console.print(
+                "\n[yellow]⚠ Режим --llm включён, но в Ollama пока нет ни одной модели.[/yellow]\n"
+                "При следующем запуске ответь [bold]y[/bold], когда фея предложит скачать модель,\n"
+                "или установи вручную: [cyan]ollama pull qwen2.5-coder:7b[/cyan]\n"
+            )
 
-        repos = [{"path": target, "name": target.name, "is_clean": is_clean}]
-        console.print(f"\n[bold]Сканирую только:[/bold] {target}\n")
+    # === Targeted path mode (recommended) ===
+    if path:
+        paths = [p.strip() for p in path.split(",") if p.strip()]
+        repos = []
+        for p in paths:
+            target = Path(p).expanduser().resolve()
+            if not (target / ".git").exists():
+                console.print(f"[yellow]Пропуск (не git-репозиторий):[/yellow] {target}")
+                continue
+            g = GitRepo(target)
+            is_clean = not g.is_dirty(untracked_files=False) if not force else True
+            repos.append({"path": target, "name": target.name, "is_clean": is_clean})
+
+        console.print(f"\n[bold]Сканирую только указанные репозитории:[/bold] {len(repos)}\n")
     else:
-        # Simplified multi-repo discovery (real scanner was more advanced)
+        # Full scan mode - show warning
+        console.print(
+            "\n[yellow]⚠ Внимание: будет просканировано много репозиториев из конфига.[/yellow]\n"
+            "Рекомендуется запускать с [cyan]--path путь/к/репозиторию[/cyan] для targeted сканирования.\n"
+        )
+        # Fall back to existing scanner logic (simplified version below)
         from pr_fairy.core.scanner import RepoScanner
         scanner = RepoScanner(cfg)
         result = scanner.find_repositories()
         repos = [{"path": r.path, "name": r.name, "is_clean": r.is_clean} for r in result.repos[:max_repos]]
-        console.print(f"\n[bold]Найдено репозиториев:[/bold] {len(repos)}\n")
-
+        console.print(f"\n[bold]Найдено репозиториев:[/bold] {len(repos)} (сканирую первые {max_repos})\n")
     total_fixes = 0
     llm_fixer = LLMMicroFixer() if use_llm else None
 
@@ -99,6 +133,11 @@ def watch(
 
         # 2. LLM suggestions (the important part)
         if use_llm and llm_fixer:
+            # Only print the "requesting" line once per run if we have a working LLM
+            if not hasattr(llm_fixer, "_warned_no_model"):
+                # We can add a simple check here in the future
+                pass
+
             try:
                 console.print("   [cyan]Запрашиваю умные правки у локальной модели...[/cyan]")
                 llm_fixes = llm_fixer.find_llm_fixes(
@@ -109,6 +148,7 @@ def watch(
                 for fix in llm_fixes:
                     console.print(f"   [magenta]LLM[/magenta] → {fix.description} (conf {fix.confidence:.0%})")
                     collected.append(fix)
+
                 if not llm_fixes:
                     console.print("   [dim]Модель не нашла безопасных правок в этом репозитории[/dim]")
             except Exception as e:
