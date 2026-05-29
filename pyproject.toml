@@ -18,3 +18,6 @@ dependencies = [
 
 [project.scripts]
 fairy = "pr_fairy.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pr_fairy"]
